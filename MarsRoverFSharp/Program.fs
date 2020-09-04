@@ -1,221 +1,94 @@
 ﻿
-// State monad 'S' 
-type S<'State,'Value> = S of ('State -> 'Value * 'State)
-
-let runS (S f) state = f state 
-
-let returnS x =
-    let run state =
-        x, state 
-    S run 
-
-let bindS f xS =
-    let run state =
-        let x, newState = runS xS state 
-        runS (f x) newState
-    S run 
-
-type StateBuilder()=
-    member this.Return(x)= returnS x
-    member this.Bind(xS, f) = bindS f xS 
-
-let state = new StateBuilder()
-
-let getS =
-    let run state =
-        (state, state)
-    S run
-
-let putS newState =
-    let run state =
-        ((), newState)
-    S run
-
-
-// Types
 type Direction = 
-    | North
-    | East 
-    | South 
+    | North 
+    | South
+    | East
     | West 
 
-
-type RoverState = { 
+type Rover = { 
     direction: Direction
     x: int
-    y: int
+    y: int 
     }
 
-// Rover Strategy
-type IRoverStrategy =
-    abstract member turnLeft: S<RoverState, unit>
-    abstract member turnRight: S<RoverState, unit>
-    abstract member moveForward: S<RoverState, unit>
-    abstract member moveBackward: S<RoverState, unit>
+type RoverInstruction<'a> =
+    | Forward of Rover * (Rover -> 'a)
+    | Backward of Rover * (Rover -> 'a) 
+    | TurnLeft of Rover * (Rover -> 'a) 
+    | TurnRight of Rover * (Rover -> 'a) 
 
-type NorthStrategy() =
-    interface IRoverStrategy with 
-        member this.turnLeft = state {
-            let! s = getS
-            do! putS {s with direction = West}
-            printfn "\nTurn Left: Point West"
-            return ()
-            }
-        member this.turnRight = state {
-            let! s = getS
-            do! putS {s with direction = East}
-            printfn "\nTurn Right: Point East"
-            return()
-            }
-        member this.moveForward = state {
-            let! s= getS
-            do! putS {s with y= s.y+1}
-            printfn "\nMove Forward to (%i,%i)" s.x (s.y+1)
-            return ()
-            }
-        member this.moveBackward = state {
-            let! s = getS 
-            do! putS {s with y=s.y-1}
-            printfn "\nMove Backward to (%i,%i)" s.x (s.y-1)
-            return()
-            }
-            
-type SouthStrategy() =
-    interface IRoverStrategy with 
-        member this.turnLeft = state {
-            let! s = getS
-            do! putS {s with direction = East}
-            printfn "\nTurn Left: Point East"
-            return ()
-            }
-        member this.turnRight = state {
-            let! s = getS
-            do! putS {s with direction = West}
-            printfn "\nTurn Right: Point West"
-            return()
-            }
-        member this.moveForward = state {
-            let! s= getS
-            do! putS {s with y= s.y-1}
-            printfn "\nMove Forward to (%i,%i)" s.x (s.y-1)
-            return ()
-            }
-        member this.moveBackward = state {
-            let! s = getS 
-            do! putS {s with y=s.y+1}
-            printfn "\nMove Backward to (%i,%i)" s.x (s.y+1)
-            return()
-            }
+type RoverProgram<'a> =
+    | Free of RoverInstruction<RoverProgram<'a>>
+    | Pure of 'a
 
-type EastStrategy() =
-    interface IRoverStrategy with 
-        member this.turnLeft = state {
-            let! s = getS
-            do! putS {s with direction = North}
-            printfn "\nTurn Left: Point North"
-            return ()
-            }
-        member this.turnRight = state {
-            let! s = getS
-            do! putS {s with direction = South}
-            printfn "\nTurn Right: Point South"
-            return()
-            }
-        member this.moveForward = state {
-            let! s= getS
-            do! putS {s with x= s.x+1}
-            printfn "\nMove Forward to  (%i,%i)" (s.x+1) s.y
-            return ()
-            }
-        member this.moveBackward = state {
-            let! s = getS 
-            do! putS {s with x=s.x-1}
-            printfn "\nMove Backward to  (%i,%i)" (s.x-1) s.y
-            return()
-            }
+let private mapI f = function 
+    | Forward (r, next) -> Forward (r, next >> f)
+    | Backward (r, next) -> Backward (r, next >> f)
+    | TurnLeft (r, next) -> TurnLeft (r, next >> f)
+    | TurnRight (r, next) -> TurnRight (r, next >> f)
 
-type WestStrategy() =
-    interface IRoverStrategy with 
-        member this.turnLeft = state {
-            let! s = getS
-            do! putS {s with direction = South}
-            printfn "\nTurn Left: Point South"
-            return ()
-            }
-        member this.turnRight = state {
-            let! s = getS
-            do! putS {s with direction = North}
-            printfn "\nTurn Right: Point North"
-            return ()
-            }
-        member this.moveForward = state {
-            let! s= getS
-            do! putS {s with x= s.x-1}
-            printfn "\nMove Forward to  (%i,%i)" (s.x-1) s.y
-            return ()
-            }
-        member this.moveBackward = state {
-            let! s = getS 
-            do! putS {s with x=s.x+1}
-            printfn "\nMove Backward to  (%i,%i)" (s.x+1) s.y
-            return()
-            }
+let rec bind f = function 
+    | Free i -> i |> mapI (bind f) |> Free 
+    | Pure x -> f x 
 
-let getStrategy = state {
-    let! s = getS 
-    return 
-        match s.direction with
-        | North -> new NorthStrategy() :> IRoverStrategy
-        | South -> new SouthStrategy() :> IRoverStrategy
-        | East -> new EastStrategy() :> IRoverStrategy
-        | West -> new WestStrategy() :> IRoverStrategy
-    }
+let (>=>) f g = f >> bind g 
+
+    
+let forwardImp r =  
+    match r.direction with 
+    | North -> {r with y = (r.y + 1)} 
+    | South -> {r with y = (r.y - 1)} 
+    | East -> {r with x = (r.x + 1)} 
+    | West -> {r with x = (r.x - 1)} 
+
+let backwardImp r = 
+    match r.direction with 
+    | North -> {r with y = (r.y - 1)} 
+    | South -> {r with y = (r.y + 1)} 
+    | East -> {r with x = (r.x - 1)} 
+    | West -> {r with x = (r.x + 1)} 
+
+let turnLeftImp r =
+    match r.direction with 
+    | North -> {r with direction = West }
+    | South -> {r with direction = East }
+    | East -> {r with direction = North }
+    | West -> {r with direction = South }
+
+let turnRightImp r =
+    match r.direction with 
+    | North -> {r with direction = East } 
+    | South -> {r with direction = West } 
+    | East -> {r with direction = South } 
+    | West -> {r with direction = North } 
+
+
+let rec interpret = function 
+    | Pure x -> x
+    | Free(Forward (r, next)) -> r |> forwardImp |> next |> interpret
+    | Free(Backward (r, next)) -> r |> backwardImp |> next |> interpret
+    | Free(TurnLeft (r, next)) -> r |> turnLeftImp |> next |> interpret
+    | Free(TurnRight (r, next)) -> r |> turnRightImp |> next |> interpret
+        
 
 [<EntryPoint>]
 let main argv =
+  
+    let forward r = Free(Forward (r, Pure))
+    let backward r = Free(Backward (r, Pure))
+    let turnLeft r = Free(TurnLeft (r, Pure))
+    let turnRight r = Free(TurnRight (r, Pure))
     
-    let moveForward = state {
-        let! strat = getStrategy 
-        do! strat.moveForward
-        return()
-        }
+    let program = 
+        forward 
+        >=> turnLeft 
+        >=> forward
+        >=> turnRight
+        >=> turnRight
+        >=> backward
 
-    let moveBackward = state {
-        let! strat = getStrategy 
-        do! strat.moveBackward
-        return ()
-        }
-
-    let turnLeft = state {
-        let! strat = getStrategy 
-        do! strat.turnLeft
-        return ()
-        }
-
-    let turnRight = state {
-        let! strat = getStrategy 
-        do! strat.turnRight
-        return ()
-        }
-
-    let testPath = state {
-        do! moveForward 
-        do! turnLeft
-        do! moveForward 
-        do! moveForward  
-        do! turnLeft
-        do! moveForward  
-        do! turnRight
-        do! moveBackward
-        return ()
-        }
-
+    let rover = {x=0; y=0; direction=North}
     
-    let startLocation = {direction=North; x=0; y=0}
-    printfn "Starting location: %A" startLocation
-
-    let endLocation = runS testPath startLocation
-    printfn "/nEnding location: %A/n" endLocation
-     
+    interpret (program rover) |> printfn "%A"
 
     0 // return an integer exit code
