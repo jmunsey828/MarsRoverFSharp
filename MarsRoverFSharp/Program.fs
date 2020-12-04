@@ -1,94 +1,147 @@
 ﻿
-type Direction = 
-    | North 
-    | South
-    | East
-    | West 
+type S<'Value,'State> = S of ('State -> 'Value * 'State)
 
-type Rover = { 
-    direction: Direction
-    x: int
-    y: int 
-    }
+let runS (S f) state = f state 
 
-type RoverInstruction<'a> =
-    | Forward of Rover * (Rover -> 'a)
-    | Backward of Rover * (Rover -> 'a) 
-    | TurnLeft of Rover * (Rover -> 'a) 
-    | TurnRight of Rover * (Rover -> 'a) 
+let bindS f xS =
+    let run state =
+        let (x, s) = runS xS state
+        runS (f x) s
+    S run 
 
-type RoverProgram<'a> =
-    | Free of RoverInstruction<RoverProgram<'a>>
-    | Pure of 'a
+let returnS x =
+    let run state =
+        (x, state)
+    S run
 
-let private mapI f = function 
-    | Forward (r, next) -> Forward (r, next >> f)
-    | Backward (r, next) -> Backward (r, next >> f)
-    | TurnLeft (r, next) -> TurnLeft (r, next >> f)
-    | TurnRight (r, next) -> TurnRight (r, next >> f)
+let getS =
+    let run state =
+        state, state
+    S run
 
-let rec bind f = function 
-    | Free i -> i |> mapI (bind f) |> Free 
-    | Pure x -> f x 
-
-let (>=>) f g = f >> bind g 
-
+let putS newState =
+    let run _ =
+        (), newState
+    S run
     
-let forwardImp r =  
-    match r.direction with 
-    | North -> {r with y = (r.y + 1)} 
-    | South -> {r with y = (r.y - 1)} 
-    | East -> {r with x = (r.x + 1)} 
-    | West -> {r with x = (r.x - 1)} 
 
-let backwardImp r = 
-    match r.direction with 
-    | North -> {r with y = (r.y - 1)} 
-    | South -> {r with y = (r.y + 1)} 
-    | East -> {r with x = (r.x - 1)} 
-    | West -> {r with x = (r.x + 1)} 
+type StateBuilder()=
+    member this.Bind(xS, f) = bindS f xS 
+    member this.Return(x) = returnS x
+    member this.Zero(x) = x 
 
-let turnLeftImp r =
-    match r.direction with 
-    | North -> {r with direction = West }
-    | South -> {r with direction = East }
-    | East -> {r with direction = North }
-    | West -> {r with direction = South }
-
-let turnRightImp r =
-    match r.direction with 
-    | North -> {r with direction = East } 
-    | South -> {r with direction = West } 
-    | East -> {r with direction = South } 
-    | West -> {r with direction = North } 
+let state = new StateBuilder()
 
 
-let rec interpret = function 
-    | Pure x -> x
-    | Free(Forward (r, next)) -> r |> forwardImp |> next |> interpret
-    | Free(Backward (r, next)) -> r |> backwardImp |> next |> interpret
-    | Free(TurnLeft (r, next)) -> r |> turnLeftImp |> next |> interpret
-    | Free(TurnRight (r, next)) -> r |> turnRightImp |> next |> interpret
+type Direction =
+    | North
+    | South
+    | East 
+    | West
+
+type Rover = {X:int; Y:int; direction: Direction}
+
+type RoverOutput =
+    | TurningLeft
+    | TurningRight
+    | MovingForward
+    | MovingBackward
+
+
+let turnRightS =
+    state {
+        let! rover = getS
+        let newDirection =
+            match rover.direction with 
+            | North -> East 
+            | East -> South
+            | South -> West
+            | West -> North
+        do! putS {rover with direction = newDirection} 
         
+        return TurningRight
+        }
+
+let turnLeftS =
+    state {
+        let! rover = getS
+        let newDirection = 
+            match rover.direction with
+            | North -> West
+            | West -> South
+            | South -> East
+            | East -> North 
+        do! putS {rover with direction = newDirection}
+
+        return TurningLeft
+        }
+
+let moveForwardS =
+    state {
+        let! rover = getS 
+        let newRover = 
+            match rover.direction with
+            | North -> {rover with Y = rover.Y + 1}
+            | South -> {rover with Y = rover.Y - 1}
+            | East -> {rover with X = rover.X + 1}
+            | West -> {rover with X = rover.X - 1}
+        do! putS newRover
+
+        return MovingForward
+        }
+
+let moveBackwardS =
+    state {
+        let! rover = getS
+        let newRover =
+            match rover.direction with
+            | North -> {rover with Y = rover.Y - 1}
+            | South -> {rover with Y = rover.Y + 1}
+            | East -> {rover with X = rover.X - 1}
+            | West -> {rover with X = rover.X + 1}
+        do! putS newRover
+
+        return MovingBackward
+        }
+
+let perform180M =
+    state {
+        let! t1 = turnLeftS
+        let! t2 = turnLeftS
+        return [t1;t2]
+        }
+
+let makeCircle =
+    state {
+        let! t1 = turnRightS
+        let! t2 = moveForwardS
+        let! t3 = turnLeftS
+        let! t4 = moveForwardS
+        let! t5 = turnLeftS
+        let! t6 = moveForwardS
+        let! t7 = turnLeftS
+        let! t8 = moveForwardS
+        let! t9 = perform180M
+
+        return [t1; t2; t3; t4; t5; t6; t7; t8] @ t9
+        }
+
 
 [<EntryPoint>]
 let main argv =
   
-    let forward r = Free(Forward (r, Pure))
-    let backward r = Free(Backward (r, Pure))
-    let turnLeft r = Free(TurnLeft (r, Pure))
-    let turnRight r = Free(TurnRight (r, Pure))
-    
-    let program = 
-        forward 
-        >=> turnLeft 
-        >=> forward
-        >=> turnRight
-        >=> turnRight
-        >=> backward
+    let rover = {X=0; Y=0; direction=North}
 
-    let rover = {x=0; y=0; direction=North}
+    let roverOutput, endingRover = runS makeCircle rover
+
+    roverOutput 
+    |> List.map (sprintf "%A")
+    |> List.reduce (fun x y -> sprintf "%s; %s" x y)
+    |> printfn "%s" 
     
-    interpret (program rover) |> printfn "%A"
+    printfn "%A" endingRover 
+
+    printfn ""
+    printfn ""
 
     0 // return an integer exit code
